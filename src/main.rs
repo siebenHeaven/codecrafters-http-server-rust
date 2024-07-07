@@ -99,6 +99,7 @@ fn handle_post_request(
     http_request: HttpRequest,
     args: Args,
     mut stream_reader: BufReader<&mut TcpStream>,
+    _encoding: Encoding,
 ) -> Option<String> {
     let path_components: Vec<_> = http_request.path.components().collect();
     match (
@@ -131,6 +132,7 @@ fn handle_get_request(
     http_request: HttpRequest,
     args: Args,
     mut _stream_reader: BufReader<&mut TcpStream>,
+    encoding: Encoding,
 ) -> Option<String> {
     if http_request.path == PathBuf::from("/") {
         return Some("HTTP/1.1 200 OK\r\n\r\n".to_string());
@@ -138,23 +140,33 @@ fn handle_get_request(
     let path_components: Vec<_> = http_request.path.components().collect();
     match path_components[1].as_os_str().to_str().unwrap() {
         "echo" => Some(format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\n{}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            if encoding != Encoding::None { "Content-Encoding: gzip\r\n" } else { "" },
             path_components[2].as_os_str().to_str().unwrap().len(),
             path_components[2].as_os_str().to_str().unwrap()
         )),
         "user-agent" => Some(format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\n{}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            if encoding != Encoding::None { "Content-Encoding: gzip\r\n" } else { "" },
             http_request.headers["User-Agent"].len(),
             http_request.headers["User-Agent"]
         )),
         "files" => 
                 std::fs::read_to_string(args.directory.join(http_request.path.strip_prefix("/files").unwrap())).ok().map(|f| {
                 format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\n{}Content-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+            if encoding != Encoding::None { "Content-Encoding: gzip\r\n" } else { "" },
             f.len(),
             f)}),
         _ => None,
     }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Encoding {
+    Gzip,
+    #[default]
+    None,
 }
 
 fn handle_client(mut stream: TcpStream, args: Args) {
@@ -163,14 +175,25 @@ fn handle_client(mut stream: TcpStream, args: Args) {
     loop {
         let mut line = String::new();
         stream_reader.read_line(&mut line).unwrap();
-        if line.trim().is_empty() { break; }
+        if line.trim().is_empty() {
+            break;
+        }
         http_request.push(line.trim().to_string());
     }
     let http_request: HttpRequest = parse(&http_request);
+    let encoding = if let Some(s) = http_request.headers.get("Accept-Encoding") {
+        if s.contains("gzip") {
+            Encoding::Gzip
+        } else {
+            Encoding::None
+        }
+    } else {
+        Encoding::None
+    };
 
     let response = match http_request.typ {
-        RequestType::Get => handle_get_request(http_request, args, stream_reader),
-        RequestType::Post => handle_post_request(http_request, args, stream_reader),
+        RequestType::Get => handle_get_request(http_request, args, stream_reader, encoding),
+        RequestType::Post => handle_post_request(http_request, args, stream_reader, encoding),
     };
 
     stream
