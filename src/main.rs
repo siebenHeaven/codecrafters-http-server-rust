@@ -169,6 +169,16 @@ enum Encoding {
     None,
 }
 
+impl Encoding {
+    fn new(s: &str) -> Self {
+        if s.contains("gzip") {
+            Encoding::Gzip
+        } else {
+            Encoding::None
+        }
+    }
+}
+
 fn handle_client(mut stream: TcpStream, args: Args) {
     let mut stream_reader = BufReader::new(&mut stream);
     let mut http_request = vec![];
@@ -181,15 +191,12 @@ fn handle_client(mut stream: TcpStream, args: Args) {
         http_request.push(line.trim().to_string());
     }
     let http_request: HttpRequest = parse(&http_request);
-    let encoding = if let Some(s) = http_request.headers.get("Accept-Encoding") {
-        if s.contains("gzip") {
-            Encoding::Gzip
-        } else {
-            Encoding::None
-        }
-    } else {
-        Encoding::None
-    };
+    let encoding = Encoding::new(
+        http_request
+            .headers
+            .get("Accept-Encoding")
+            .map_or_else(|| "", |v| v.as_str()),
+    );
 
     let response = match http_request.typ {
         RequestType::Get => handle_get_request(http_request, args, stream_reader, encoding),
